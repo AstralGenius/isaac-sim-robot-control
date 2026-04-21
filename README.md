@@ -34,7 +34,7 @@ This project represents the first step toward building autonomous robotic system
 
 ## Demo
 
-https://youtu.be/7z_VH4hv9Sw
+[![Isaac Sim Robot Demo](https://img.youtube.com/vi/7z_VH4hv9Sw/0.jpg)](https://youtu.be/7z_VH4hv9Sw)
 
 ---
 
@@ -74,7 +74,7 @@ This project is designed to run inside NVIDIA Isaac Sim.
 4. Run the script:
 
    ```
-   scripts/hello_robot.py
+   hello_robot.py
    ```
 5. Start simulation (Play) and observe robot behaviour
 
