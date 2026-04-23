@@ -47,7 +47,7 @@ isaac-sim-robot-control/
 │   └── hello_robot.py        # main control script
 │
 ├── media/
-│   └── demo.mp4              # simulation recording
+│   └── demo.mkv              # simulation recording
 │
 ├── docs/                     # optional notes / ideas
 │
