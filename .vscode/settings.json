@@ -1,0 +1,24 @@
+{
+    "python.defaultInterpreterPath": "/home/astralgenius/isaacsim/python.sh",
+    "python.analysis.extraPaths": [
+        "/home/astralgenius/isaacsim/exts/isaacsim.core.api",
+        "/home/astralgenius/isaacsim/exts/isaacsim.core.utils",
+        "/home/astralgenius/isaacsim/exts/isaacsim.core.prims",
+        "/home/astralgenius/isaacsim/exts/isaacsim.robot.manipulators",
+        "/home/astralgenius/isaacsim/exts/isaacsim.storage.native",
+        "/home/astralgenius/isaacsim/exts/isaacsim.examples.interactive",
+        "/home/astralgenius/isaacsim/kit/python/lib/python3.11/site-packages",
+        "/home/astralgenius/isaacsim/kit/exts",
+        "/home/astralgenius/isaacsim/extsDeprecated",
+        "/opt/ros/jazzy/lib/python3.12/site-packages",
+        "${workspaceFolder}/ros2_ws/src/robot_controller",
+        "${workspaceFolder}/ros2_ws/src/robot_simulation"
+    ],
+    "python.analysis.typeCheckingMode": "off",
+    "python.terminal.activateEnvironment": false,
+    "files.associations": {
+        "*.urdf": "xml",
+        "*.xacro": "xml",
+        "package.xml": "xml"
+    }
+}

@@ -1,0 +1,20 @@
+running develop
+running egg_info
+creating robot_simulation.egg-info
+writing robot_simulation.egg-info/PKG-INFO
+writing dependency_links to robot_simulation.egg-info/dependency_links.txt
+writing requirements to robot_simulation.egg-info/requires.txt
+writing top-level names to robot_simulation.egg-info/top_level.txt
+writing manifest file 'robot_simulation.egg-info/SOURCES.txt'
+reading manifest file 'robot_simulation.egg-info/SOURCES.txt'
+writing manifest file 'robot_simulation.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/lib/python3.12/site-packages/robot-simulation.egg-link (link to .)
+
+Installed /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/build/robot_simulation
+running symlink_data
+creating /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/share/ament_index
+creating /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/share/ament_index/resource_index
+creating /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/share/ament_index/resource_index/packages
+symbolically linking /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/build/robot_simulation/resource/robot_simulation -> /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/share/ament_index/resource_index/packages
+symbolically linking /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/build/robot_simulation/package.xml -> /home/astralgenius/workspace/isaac-sim-robot-control/ros2_ws/install/robot_simulation/share/robot_simulation

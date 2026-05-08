@@ -1,0 +1,2 @@
+[console_scripts]
+jetbot_controller = robot_controller.jetbot_controller:main
