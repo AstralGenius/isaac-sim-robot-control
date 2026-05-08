@@ -42,10 +42,10 @@ class WaypointController(Node):
 
         # Waypoints (a 2x2 meter square loop)
         self.waypoints = [
-            (2.0, 0.0),   # waypoint 1
-            (2.0, 2.0),   # waypoint 2
-            (0.0, 2.0),   # waypoint 3
-            (0.0, 0.0),   # waypoint 4 (back to start)
+            (0.5, 0.0),   # waypoint 1
+            (0.5, 0.5),   # waypoint 2
+            (0.0, 0.5),   # waypoint 3
+            (0.0, 0.0),   # waypoint 4
         ]
         self.current_waypoint_index = 0
 
