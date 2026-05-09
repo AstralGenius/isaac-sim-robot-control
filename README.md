@@ -2,7 +2,7 @@
 
 A production-grade mobile robotics project demonstrating sim-to-real architecture using **NVIDIA Isaac Sim** and **ROS 2 Jazzy**. The robot autonomously navigates a sequence of waypoints using closed-loop control with real-time odometry feedback. The control stack is fully decoupled from the simulator — the same code could drive a real Jetbot without modification.
 
-[![Isaac Sim Robot Demo](https://img.youtube.com/vi/Z3b984r81SI.jpg)](https://youtu.be/Z3b984r81SI)
+[![Isaac Sim Robot Demo](https://img.youtube.com/vi/Z3b984r81SI/0.jpg)](https://youtu.be/Z3b984r81SI)
 
 ---
 
