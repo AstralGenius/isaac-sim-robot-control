@@ -1,6 +1,6 @@
 # Isaac Sim Robot Control
 
-A production-grade mobile robotics project demonstrating sim-to-real architecture using **NVIDIA Isaac Sim** and **ROS 2 Jazzy**. The robot autonomously navigates a sequence of waypoints using closed-loop control with real-time odometry feedback. The control stack is fully decoupled from the simulator — the same code could drive a real Jetbot without modification.
+A production-grade mobile robotics project demonstrating sim-to-real architecture using **NVIDIA Isaac Sim 5.0** and **ROS 2 Jazzy**. The robot autonomously navigates a sequence of waypoints using closed-loop control with real-time odometry feedback. The control stack is fully decoupled from the simulator — the same code would drive a real Jetbot without modification.
 
 [![Isaac Sim Robot Demo](https://img.youtube.com/vi/Z3b984r81SI/0.jpg)](https://youtu.be/Z3b984r81SI)
 
@@ -29,25 +29,83 @@ A production-grade mobile robotics project demonstrating sim-to-real architectur
 Two independent processes communicate via ROS 2 topics over FastDDS. This separation enables:
 
 - **Sim-to-real transfer** — the controller is simulator-agnostic
-- **Independent testing** — controller logic can be unit-tested without Isaac Sim
+- **Independent testing** — each side can be unit-tested without the other
 - **Production patterns** — matches the architecture used by Figure, 1X, and Boston Dynamics
+
+---
+
+## Code Organization
+
+Both sides follow the **"functional core, imperative shell"** pattern. Pure logic (math, state machine) lives in standalone modules with no I/O dependencies; ROS 2 and Isaac Sim integration lives in thin shells that wrap the pure logic.
+
+### Isaac Sim side (`isaac_sim/`)
+
+```
+isaac_sim/
+├── simulation.py          # Entry point — main loop, ~80 lines
+├── config.py              # Tunable parameters (wheels, asset paths, topics)
+├── kinematics.py          # Pure math (quaternions, differential drive)
+├── robot_bridge.py        # ROS 2 node: subscribes /cmd_vel, publishes /odom
+├── scene_setup.py         # World, ground plane, robot loading
+└── run_simulation.sh      # Launch script with ROS 2 env vars
+```
+
+### ROS 2 controller (`ros2_ws/src/robot_controller/robot_controller/`)
+
+```
+robot_controller/
+├── jetbot_controller.py   # Entry point — Node class, ROS 2 plumbing
+├── config.py              # Gains, tolerances, default waypoints
+├── pose_utils.py          # Pure math (quaternion → yaw, angle wrap)
+└── state_machine.py       # Pure state machine (ROTATE/DRIVE logic, enum, dataclasses)
+```
+
+### Module dependency graph
+
+```
+        simulation.py  ◄──┐                  jetbot_controller.py  ◄──┐
+              │           │                          │                │
+              ▼           │                          ▼                │
+        scene_setup.py    │                   state_machine.py        │
+              │           │                          │                │
+              ▼           │                          ▼                │
+        robot_bridge.py   │                   pose_utils.py           │
+              │           │                          │                │
+              ▼           │                          ▼                │
+        kinematics.py     │                   config.py               │
+              │           │                                           │
+              ▼           │                                           │
+        config.py ────────┘                                           │
+                                                                      │
+        Pure functions (no rclpy, no Isaac Sim) ◄─────────────────────┘
+```
+
+Higher-level modules depend on lower-level ones; never the reverse.
 
 ---
 
 ## Features
 
 ### Closed-loop autonomous waypoint navigation
-- Robot drives a configurable sequence of waypoints (default: 2×2m square)
+- Configurable waypoint sequences (default: 2×2m square)
 - State machine alternates between **ROTATE** (align to target) and **DRIVE** (move toward target)
 - Proportional control on both heading and distance errors
 - Real-time pose feedback from `/odom`
+- Smooth motion with continuous heading correction while driving
 
 ### Production-grade ROS 2 architecture
 - ROS 2 Jazzy controller node publishing differential drive commands
 - Standalone Isaac Sim script with embedded ROS 2 bridge
 - Differential drive kinematics (`Twist` → wheel velocity conversion)
 - 20 Hz control loop with deterministic behavior
-- Industry-standard colcon workspace and package layout
+- Industry-standard colcon workspace and Python package layout
+
+### Senior-grade code quality
+- Type hints on all public APIs
+- Pure functions extracted from I/O code for unit-testability
+- Type-safe state machine using Python enums and dataclasses
+- Centralized configuration — no scattered magic numbers
+- Consistent module dependency hierarchy (no circular imports)
 
 ---
 
@@ -59,29 +117,6 @@ Two independent processes communicate via ROS 2 topics over FastDDS. This separa
 - **DDS:** FastDDS
 - **Build:** colcon, ament_python
 - **OS:** Ubuntu 24.04 LTS (kernel 6.17)
-
----
-
-## Project Structure
-
-```
-isaac-sim-robot-control/
-├── isaac_sim/
-│   ├── simulation.py              # Standalone Isaac Sim script with ROS 2 bridge
-│   └── run_simulation.sh          # Launch script with proper env vars
-├── ros2_ws/
-│   └── src/
-│       ├── robot_controller/      # Waypoint follower (closed-loop)
-│       ├── robot_simulation/      # Future: Isaac Sim helpers
-│       ├── robot_description/     # Future: URDF model
-│       └── robot_bringup/         # Future: launch files
-├── docker/                        # Future: containerized deployment
-├── docs/                          # Architecture notes
-├── tests/                         # Unit tests
-├── media/
-│   └── demo.mp4
-└── README.md
-```
 
 ---
 
@@ -119,7 +154,7 @@ source ros2_ws/install/setup.bash
 ros2 run robot_controller jetbot_controller
 ```
 
-The Jetbot will autonomously drive a 0.5×0.5m square: rotating to face each waypoint, then driving to it, until the loop is complete.
+The Jetbot will autonomously drive a 2×2m square: rotating to face each waypoint, then driving to it, until the loop is complete.
 
 ### Verify topics
 
@@ -135,7 +170,7 @@ ros2 topic echo /cmd_vel    # Velocity commands from the controller
 
 ### Differential Drive Kinematics
 
-The controller publishes high-level `Twist` messages with linear and angular velocities. The Isaac Sim bridge converts these to individual wheel velocities:
+The controller publishes high-level `Twist` messages with linear and angular velocities. The Isaac Sim bridge converts these to individual wheel velocities using the inverse kinematics in `isaac_sim/kinematics.py`:
 
 ```
 v_left  = (linear.x - angular.z * wheel_separation / 2) / wheel_radius
@@ -146,17 +181,17 @@ This matches the kinematics of any differential-drive robot (Jetbot, Turtlebot, 
 
 ### Closed-Loop Waypoint Following
 
-The controller subscribes to `/odom` and runs a state machine for each waypoint:
+The controller subscribes to `/odom` and delegates to a pure state machine (`robot_controller/state_machine.py`):
 
-1. **ROTATE** — Compute `heading_error = atan2(dy, dx) - current_yaw`. Apply proportional angular velocity until `|heading_error| < 0.05 rad`.
-2. **DRIVE** — Compute `distance_error = sqrt(dx² + dy²)`. Apply proportional linear velocity (with continued heading correction) until `distance_error < 0.1 m`.
-3. Advance to next waypoint, repeat.
+1. **ROTATING** — Compute `heading_error = atan2(dy, dx) - current_yaw`. Apply proportional angular velocity until `|heading_error| < 0.05 rad`.
+2. **DRIVING** — Compute `distance_error = sqrt(dx² + dy²)`. Apply proportional linear velocity (with continued heading correction) until `distance_error < 0.1 m`.
+3. Advance to next waypoint, repeat. Transition to **DONE** when all waypoints are reached.
 
-The same logic would work on a real robot — just swap the Isaac Sim simulation for actual hardware odometry.
+The state machine is implemented as a pure function — `step(state, pose, target, gains) → (next_state, command, reached)` — making it directly unit-testable without ROS 2 or Isaac Sim.
 
-### Python Interop
+### Python Interop Between Isaac Sim and ROS 2
 
-Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim ROS 2 bridge ships its own Python 3.11-compatible `rclpy`, which is loaded via `LD_LIBRARY_PATH` and `PYTHONPATH` injection in `run_simulation.sh`. Inter-process communication happens at the FastDDS layer, so Python version mismatch doesn't matter at the wire level.
+Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim ROS 2 bridge ships its own Python 3.11-compatible `rclpy`, which is loaded via `LD_LIBRARY_PATH` and `PYTHONPATH` injection in `run_simulation.sh`. Inter-process communication happens at the FastDDS layer, so Python version mismatch doesn't matter at the wire level — the two processes only exchange serialized messages.
 
 ---
 
@@ -174,7 +209,11 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 - [x] Proportional control on heading and distance errors
 - [x] Configurable waypoint sequence
 
-### Phase 3 — Perception 🚧
+### Phase 3 — Architecture refactor & perception 🚧
+- [x] Refactor to modular architecture (functional core / imperative shell)
+- [x] Extract pure logic into standalone, unit-testable modules
+- [x] Type-safe state machine with enums and dataclasses
+- [x] Centralized configuration modules
 - [ ] Add RTX LiDAR sensor in Isaac Sim
 - [ ] Publish `/scan` topic (sensor_msgs/LaserScan)
 - [ ] Implement reactive obstacle avoidance
@@ -186,8 +225,9 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 - [ ] Goal-based navigation with behavior trees
 
 ### Phase 5 — Production Engineering
+- [ ] Unit tests for kinematics and state machine
 - [ ] Dockerfile and docker-compose for reproducibility
-- [ ] Unit tests with pytest, integration tests with launch_testing
+- [ ] Integration tests with launch_testing
 - [ ] GitHub Actions CI/CD pipeline
 - [ ] Comprehensive technical documentation
 
@@ -195,7 +235,7 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 
 ## Engineering Notes
 
-A detailed write-up of architecture decisions, sim-to-real considerations, and the Python version interop solution will be added in final phase.
+A detailed write-up of architecture decisions, sim-to-real considerations, and the Python version interop solution lives in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -205,6 +245,7 @@ A detailed write-up of architecture decisions, sim-to-real considerations, and t
 
 - LinkedIn: [vijay-yadav1995](https://www.linkedin.com/in/vijay-yadav1995)
 - GitHub: [AstralGenius](https://github.com/AstralGenius)
+- Portfolio: [astralgenius.com](https://astralgenius.com)
 
 ---
 
