@@ -25,6 +25,7 @@ simulation_app = SimulationApp({
 # Must happen after SimulationApp() but before importing rclpy.
 from isaacsim.core.utils.extensions import enable_extension
 enable_extension("isaacsim.ros2.bridge")
+enable_extension("isaacsim.sensors.physx")
 simulation_app.update()
 
 # Now safe to import everything else.
@@ -36,6 +37,8 @@ from isaacsim.core.utils.types import ArticulationAction
 from isaac_sim.kinematics import yaw_from_isaac_quaternion
 from isaac_sim.robot_bridge import IsaacSimBridge
 from isaac_sim.scene_setup import setup_scene
+from isaac_sim.obstacles import add_obstacles
+from isaac_sim.sensors import setup_lidar
 
 
 def run_simulation_loop(simulation_app, world, robot, articulation_controller, bridge):
@@ -84,7 +87,17 @@ def main():
     bridge = IsaacSimBridge()
 
     world, robot, articulation_controller = setup_scene()
-    bridge.get_logger().info('Jetbot loaded — entering simulation loop.')
+
+    # Add obstacles to the scene
+    add_obstacles(world)
+
+    # Attach LiDAR and wire to ROS 2 /scan via OmniGraph
+    setup_lidar()
+
+    # Process one update so the OmniGraph nodes initialize
+    simulation_app.update()
+
+    bridge.get_logger().info('Jetbot + LiDAR + obstacles loaded — entering simulation loop.')
 
     try:
         run_simulation_loop(

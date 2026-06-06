@@ -50,3 +50,34 @@ ROBOT_FRAME_ID = "base_link"
 # ============================================================
 
 NODE_NAME = "isaac_sim_bridge"
+
+
+# ============================================================
+# LiDAR Sensor
+# ============================================================
+# SLAMTEC RPLidar S2E — 2D rotating LiDAR, 360°, 10 Hz, 30m range.
+# Config file lives in Isaac Sim's lidar_configs directory.
+
+LIDAR_CONFIG_NAME = "NVIDIA/Debug_Rotary"
+LIDAR_PRIM_PATH = "/World/Jetbot/chassis/lidar"
+LIDAR_FRAME_ID = "lidar_link"
+
+# Mount position relative to the chassis (meters).
+# 0.1 m above the chassis center gives clearance above the camera bracket.
+LIDAR_MOUNT_TRANSLATION = (0.0, 0.0, 0.1)
+
+
+# ============================================================
+# Obstacles
+# ============================================================
+# Cuboid obstacles placed on the robot's path.
+# Each tuple: (name, position, size, color)
+# - position is the cube's center in world frame (meters)
+# - size is the cube's edge length in meters (uniform cube)
+# - color is RGB normalized to [0, 1]
+
+OBSTACLE_DEFINITIONS = [
+    ("obstacle_1", (1.0, 0.5, 0.15), 0.3, (1.0, 0.3, 0.3)),
+    ("obstacle_2", (1.5, 1.5, 0.15), 0.3, (1.0, 0.3, 0.3)),
+    ("obstacle_3", (0.5, 1.5, 0.15), 0.3, (1.0, 0.3, 0.3)),
+]
