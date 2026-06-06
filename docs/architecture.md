@@ -36,13 +36,13 @@ This principle drove the most important architectural decision: running the cont
 
 ### 2.2 Functional core, imperative shell
 
-Pure functions (math, state machine logic) are kept in modules with no I/O dependencies. ROS 2 nodes and Isaac Sim integration code form thin "shells" that wrap the pure logic.
+Pure functions (math, state machine logic, perception) are kept in modules with no I/O dependencies. ROS 2 nodes and Isaac Sim integration code form thin "shells" that wrap the pure logic.
 
 This is a pattern popularized by Gary Bernhardt — the imperative shell handles side effects (network, physics, time), the functional core computes outputs from inputs deterministically. The benefit is testability: pure logic can be exhaustively tested with no infrastructure, while the shell only needs smoke tests.
 
 ### 2.3 Single responsibility per module
 
-Each Python module owns exactly one concern. `kinematics.py` is responsible for math; `robot_bridge.py` is responsible for ROS 2 I/O; `scene_setup.py` is responsible for Isaac Sim scene construction. When a requirement changes, only the relevant module changes.
+Each Python module owns exactly one concern. `kinematics.py` is responsible for math; `robot_bridge.py` is responsible for ROS 2 I/O; `scene_setup.py` is responsible for Isaac Sim scene construction; `perception.py` is responsible for scan analysis. When a requirement changes, only the relevant module changes.
 
 ### 2.4 Configuration over magic numbers
 
@@ -59,8 +59,10 @@ All tunable parameters live in dedicated `config.py` modules. Magic numbers scat
 │  (Python 3.12)      │                │  (Python 3.11)      │
 │                     │   /odom        │                     │
 │                     │   ◄──────      │                     │
+│                     │   /scan        │                     │
+│                     │   ◄──────      │                     │
 └─────────────────────┘                └─────────────────────┘
-        ROS 2 Jazzy                     Isaac Sim 5.0 with
+        ROS 2 Jazzy                     Isaac Sim 5.1 with
         system install                  bundled ROS 2 bridge
               │                                  │
               └─────── FastDDS ──────────────────┘
@@ -92,7 +94,7 @@ This is the most interesting engineering problem the project solves.
 
 ### 4.1 The constraint
 
-- **Isaac Sim 5.0** ships its own Python interpreter at version 3.11. Its `rclpy` is a Python 3.11 build distributed inside the Isaac Sim install.
+- **Isaac Sim 5.1** ships its own Python interpreter at version 3.11. Its `rclpy` is a Python 3.11 build distributed inside the Isaac Sim install.
 - **ROS 2 Jazzy** targets Ubuntu 24.04, which ships Python 3.12. Its `rclpy` is a Python 3.12 build.
 - Importing the wrong `rclpy` inside the Isaac Sim process fails with a cryptic C extension load error, because Python C extensions are not ABI-compatible across versions.
 
@@ -119,6 +121,8 @@ This is a real-world example of the value of process separation. If the controll
 simulation.py        — entry point, main loop (~80 lines)
   ↓
 scene_setup.py       — world, ground plane, robot loading
+sensors.py           — PhysX LiDAR + OmniGraph /scan publishing
+obstacles.py         — static cuboid obstacles for testing
   ↓
 robot_bridge.py      — ROS 2 node: /cmd_vel subscribe, /odom publish
   ↓
@@ -127,27 +131,25 @@ kinematics.py        — pure math (quaternions, differential drive)
 config.py            — tunable parameters
 ```
 
-Each arrow represents an import dependency. The hierarchy is strict: higher modules depend on lower modules, never the reverse. This produces a directed acyclic dependency graph.
-
 ### 5.2 ROS 2 controller side (`ros2_ws/src/robot_controller/`)
 
 ```
 jetbot_controller.py — entry point, Node class, ROS 2 plumbing
   ↓
-state_machine.py     — pure state logic (enum, dataclasses, step function)
-  ↓
+state_machine.py     — pure state logic (enum, dataclasses, step + avoidance)
+perception.py        — pure scan analysis (front cone, clearance comparison)
 pose_utils.py        — pure math (quaternion → yaw, angle normalization)
   ↓
-config.py            — gains, tolerances, default waypoints
+config.py            — gains, tolerances, waypoints, perception params
 ```
 
 The same structure mirrored on the controller side. Symmetry between the two sides is intentional — it reduces cognitive load when switching contexts.
 
 ### 5.3 The pure layer
 
-The bottom two layers on each side (`kinematics.py`, `pose_utils.py`, both `config.py` files, and `state_machine.py`) have **zero dependencies on rclpy, Isaac Sim, or any I/O library**. They can be imported, called, and tested in a plain Python REPL.
+The bottom two layers on each side (`kinematics.py`, `pose_utils.py`, `perception.py`, both `config.py` files, and `state_machine.py`) have **zero dependencies on rclpy, Isaac Sim, or any I/O library**. They can be imported, called, and tested in a plain Python REPL.
 
-This is the "functional core." It contains the interesting decisions of the system — how to compute wheel velocities, when to transition between states, how to wrap angles — without any infrastructure baggage.
+This is the "functional core." It contains the interesting decisions of the system — how to compute wheel velocities, when to transition between states, how to analyze a scan — without any infrastructure baggage.
 
 ---
 
@@ -221,20 +223,85 @@ Putting this in a pure function (rather than embedding it in the bridge node) me
 
 ---
 
-## 8. Decisions Considered and Rejected
+## 8. Perception and Obstacle Avoidance (Phase 3)
 
-### 8.1 OmniGraph for ROS 2 publishing
+The reactive obstacle avoidance feature illustrates the architectural patterns in action.
+
+### 8.1 Sensor stack
+
+A 2D LiDAR is attached to the Jetbot's chassis in `isaac_sim/sensors.py`. Implementation choices:
+
+- **PhysX-based Lidar, not RTX Lidar.** Isaac Sim 5.1 has two LiDAR systems. The newer RTX-accelerated system has a bug in the `IsaacComputeRTXLidarFlatScan` node where it injects nonzero elevation values into 2D-configured sensors, causing the OmniGraph LaserScan publisher to refuse to emit data. The older PhysX system (CPU-based raycasts) works reliably and produces identical `sensor_msgs/LaserScan` output. The performance difference is irrelevant for a 360-beam horizontal scan at 10 Hz.
+- **OmniGraph for publishing.** Sensor-to-ROS-2 bridging is done via OmniGraph (`omni.graph.action.OnPlaybackTick → IsaacReadLidarBeams → ROS2PublishLaserScan`) rather than a Python loop. OmniGraph executes in C++ and avoids per-frame Python overhead.
+- **`draw_lines=True`** is enabled so the LiDAR rays are visible in the viewport, providing instant visual confirmation that the sensor is working.
+
+### 8.2 Perception layer
+
+`robot_controller/perception.py` contains pure functions for scan analysis:
+
+- `distance_to_nearest_obstacle_in_front()` — minimum valid range within the front cone
+- `is_obstacle_too_close()` — boolean threshold check
+- `clearance_left_vs_right()` — comparative clearance on each side of the forward direction, used to decide which way to turn
+
+The functions handle the practical details of working with raw LaserScan data: filtering `inf` and `nan` values, respecting `range_min` / `range_max`, mapping angles to array indices via the standard `angle_min + index × angle_increment` convention.
+
+### 8.3 Avoidance as a post-processing layer
+
+Reactive avoidance is implemented as a separate pure function in `state_machine.py`:
+
+```python
+def apply_obstacle_avoidance(command, obstacle_info, gains) -> VelocityCommand:
+    """Modify a velocity command to avoid obstacles."""
+```
+
+The controller's main loop runs:
+
+```python
+command = step(...)                                # waypoint logic
+command = apply_obstacle_avoidance(command, info)  # avoidance overlay
+```
+
+When the front cone detects an obstacle within `OBSTACLE_DANGER_DISTANCE_M`, the function:
+
+1. Reduces linear velocity to 30% (don't plow into the obstacle while turning)
+2. Adds an angular velocity of ±70% of max toward the side with more clearance
+
+This composition pattern has several benefits over modifying `step()` directly:
+
+- **The state machine stays pure.** Same inputs, same outputs. Existing waypoint tests remain valid.
+- **Avoidance strategies are swappable.** Replacing "slow and curve" with "stop and re-plan" or "potential fields" is a one-line change in the controller, with no impact on the state machine.
+- **Reads cleanly in the main loop.** Two clear stages: compute waypoint command, then modify for safety.
+
+### 8.4 Limitations of reactive avoidance
+
+The current implementation is purely reactive — no map, no path planning, no memory of previously-seen obstacles. It works for moderate-sized obstacles on simple paths, but has known failure modes:
+
+- **Large obstacles relative to detection radius** require either bigger detection distances (more reaction time) or a planner that goes around them deliberately.
+- **Local minima**: a U-shaped trap could leave the robot circling indefinitely.
+- **No memory**: the robot reacts to what it sees right now; it can't reason about "I just came from there."
+
+Phase 4 (Nav2 integration) will address these by replacing the hand-rolled waypoint loop with a proper path planner that has a costmap and global view.
+
+---
+
+## 9. Decisions Considered and Rejected
+
+### 9.1 RTX LiDAR for Phase 3
+
+We considered using the newer RTX-accelerated LiDAR system. Rejected because Isaac Sim 5.1-rc has a known bug in `IsaacComputeRTXLidarFlatScan` that prevents 2D scan publishing. PhysX Lidar produces the same ROS 2 messages and is documented as stable across versions.
+
+### 9.2 OmniGraph for ROS 2 odometry publishing
 
 Isaac Sim supports authoring sensor publishing pipelines visually as OmniGraph nodes. We considered using OmniGraph instead of a Python ROS 2 node for /odom.
 
-Rejected because:
+Rejected for /odom because:
 - OmniGraph is Isaac Sim specific; the same pattern wouldn't transfer to a real robot
 - Python provides more flexibility for custom message formats
 - Debugging OmniGraph is harder than Python
 
-OmniGraph will be revisited for the LiDAR publishing in Phase 3, where the C++ path provides genuine performance benefits and the ROS 2 message format is standard (`LaserScan`).
+Accepted for LiDAR because the C++ path provides genuine performance benefits and the ROS 2 message format is standard (`LaserScan`).
 
-### 8.2 Embedded controller inside simulation.py
+### 9.3 Embedded controller inside simulation.py
 
 We considered putting the control logic inside the Isaac Sim script as a Python class, avoiding the second process entirely.
 
@@ -243,7 +310,15 @@ Rejected because:
 - Tightly couples control logic to Isaac Sim's lifecycle
 - Makes it impossible to test the controller without launching the simulator
 
-### 8.3 YAML-based configuration
+### 9.4 Modifying state machine for avoidance
+
+For Phase 3, we considered adding scan handling and avoidance logic directly to `state_machine.step()`. Rejected in favor of a post-processing modifier function because:
+
+- Adding a `scan` parameter to `step()` would bloat its interface for a concern (safety) different from waypoint following
+- Existing tests of `step()` would need to be updated to pass scan data
+- The avoidance strategy becomes harder to swap independently
+
+### 9.5 YAML-based configuration
 
 We considered loading parameters from YAML files at startup.
 
@@ -252,50 +327,48 @@ Rejected for now because:
 - ROS 2 parameter server is the standard way to expose runtime-tunable parameters
 - Will migrate to ROS 2 parameters when Nav2 integration arrives in Phase 4
 
-### 8.4 ROS 1
+### 9.6 ROS 1
 
-ROS 1 is end-of-life and not supported by Isaac Sim 5.0's bridge. Not seriously considered.
+ROS 1 is end-of-life and not supported by Isaac Sim 5.1's bridge. Not seriously considered.
 
 ---
 
-## 9. Future Architecture
-
-### Phase 3: Perception
-
-- RTX LiDAR added to Isaac Sim via OmniGraph (the performance benefit outweighs the architectural cost for sensor publishing)
-- New ROS 2 topic `/scan` (sensor_msgs/LaserScan) published from Isaac Sim
-- Controller gains a `scan_subscription` and a perception module that reasons about distance to nearest obstacles
-- State machine extended with an AVOIDING state, or perception integrated as a velocity-shaping layer on top of the existing state machine
+## 10. Future Architecture
 
 ### Phase 4: Nav2 integration
 
 - Replace hand-rolled waypoint logic with Nav2 BehaviorTree
 - Add `nav2_bringup` launch files
-- Robot publishes a TF tree (`odom` → `base_link` → sensors)
+- Robot publishes a TF tree (`odom` → `base_link` → `lidar_link`)
 - SLAM Toolbox builds a map from `/scan` data
+- Costmap-based planning replaces reactive avoidance
 
 This will require restructuring the controller from a single node into a launch graph, but the principles of the existing architecture (pure logic separated from ROS 2 plumbing) carry over.
 
 ### Phase 5: Production readiness
 
-- Unit tests for `kinematics.py`, `pose_utils.py`, `state_machine.py` (the pure layer)
+- Unit tests for `kinematics.py`, `pose_utils.py`, `state_machine.py`, `perception.py` (the pure layer)
 - Integration tests using `launch_testing`
 - Dockerfile for reproducible builds
 - GitHub Actions CI/CD running build + test on every push
 
 ---
 
-## 10. What I Learned
+## 11. What I Learned
 
 A few things became concrete while building this project:
 
 1. **Process separation is a powerful abstraction.** It forced a clean interface (ROS 2 topics) between simulator and controller. Without it, the Python version interop problem would have been intractable.
 
-2. **Pure functions pay back the extraction cost immediately.** Once `kinematics.py` and `state_machine.py` existed as pure modules, debugging became dramatically easier — I could test math hypotheses in a REPL instead of restarting the entire stack.
+2. **Pure functions pay back the extraction cost immediately.** Once `kinematics.py`, `state_machine.py`, and `perception.py` existed as pure modules, debugging became dramatically easier — I could test math hypotheses in a REPL instead of restarting the entire stack.
 
 3. **Centralized configuration is non-negotiable above a certain code size.** The 200-line version of `simulation.py` had constants scattered throughout. After three rounds of tuning, I couldn't remember where a number lived. The `config.py` modules eliminated this entire class of problem.
 
-4. **Documentation written immediately after refactoring is much better than documentation written later.** The "why" of every decision is fresh; weeks later, those reasons fade.
+4. **Architectural composition beats inheritance for behavior layering.** Adding obstacle avoidance as a post-processing function on top of the waypoint state machine was cleaner than parameterizing the state machine itself. The mental model — "compute desired action, then modify for safety" — is also a real pattern from production robotics (action shielding, safety layers).
+
+5. **Working around bugs in fast-moving simulators is part of the job.** Hitting the RTX LiDAR bug, recognizing it from the error message, finding the forum discussion, and pivoting to PhysX LiDAR took half a day. That kind of debugging is the median experience in robotics engineering. The lesson: when something doesn't work, check whether it's known-broken before committing to a fix.
+
+6. **Documentation written immediately after refactoring is much better than documentation written later.** The "why" of every decision is fresh; weeks later, those reasons fade.
 
 ---
 
