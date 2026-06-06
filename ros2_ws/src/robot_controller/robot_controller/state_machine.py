@@ -131,3 +131,55 @@ def step(
 
     # DONE state — stay stopped
     return ControllerState.DONE, VelocityCommand(), False
+
+@dataclass
+class ObstacleInfo:
+    """Snapshot of the current obstacle situation.
+
+    Populated from LaserScan analysis by the controller's perception layer.
+    """
+    too_close: bool
+    left_clearance: float
+    right_clearance: float
+
+
+def apply_obstacle_avoidance(
+    command: VelocityCommand,
+    obstacle: ObstacleInfo,
+    gains: ControlGains,
+) -> VelocityCommand:
+    """Modify a velocity command to avoid obstacles.
+
+    Strategy: slow down + curve away from the closer side.
+    - When obstacle is too close, scale forward velocity down to 30%
+    - Add an angular velocity component toward the side with more clearance
+
+    This is a post-processing step applied AFTER the waypoint state machine
+    has computed its desired command. Keeping it separate from step() makes
+    the state machine pure and the avoidance strategy swappable.
+
+    Args:
+        command: the current desired velocity from the waypoint state machine
+        obstacle: snapshot of front-cone obstacle situation
+        gains: control gains (used for max_angular_speed clamp)
+
+    Returns:
+        Modified VelocityCommand. If no obstacle is too close, returns the
+        input unchanged.
+    """
+    if not obstacle.too_close:
+        return command
+
+    # Decide which way to turn — toward the more open side
+    if obstacle.left_clearance > obstacle.right_clearance:
+        avoidance_angular_z = gains.max_angular_speed * 0.7
+    else:
+        avoidance_angular_z = -gains.max_angular_speed * 0.7
+
+    # Slow forward velocity to 30% so we don't plow into obstacle while turning
+    safer_linear = command.linear_x * 0.3
+
+    return VelocityCommand(
+        linear_x=safer_linear,
+        angular_z=avoidance_angular_z,
+    )

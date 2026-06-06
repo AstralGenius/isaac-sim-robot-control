@@ -87,4 +87,4 @@ OBSTACLE_DETECTION_HALF_FOV_RAD = 0.5
 # the robot moves at most 0.015 m per control tick, so 0.4 m gives plenty of
 # reaction headroom.
 
-OBSTACLE_DANGER_DISTANCE_M = 0.4
+OBSTACLE_DANGER_DISTANCE_M = 0.7

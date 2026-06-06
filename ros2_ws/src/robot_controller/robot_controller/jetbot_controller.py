@@ -28,7 +28,9 @@ from robot_controller.pose_utils import yaw_from_ros_quaternion
 from robot_controller.state_machine import (
     ControllerState,
     ControlGains,
+    ObstacleInfo,
     VelocityCommand,
+    apply_obstacle_avoidance,
     step,
 )
 
@@ -99,27 +101,45 @@ class WaypointController(Node):
         """Cache the latest LaserScan message for the control loop to read."""
         self._latest_scan = msg
 
+    def _compute_obstacle_info(self):
+        """Build an ObstacleInfo snapshot from the latest /scan.
+
+        Returns None if no scan has been received yet.
+        """
+        scan = self._latest_scan
+        if scan is None:
+            return None
+
+        too_close = perception.is_obstacle_too_close(
+            ranges=scan.ranges,
+            angle_min=scan.angle_min,
+            angle_increment=scan.angle_increment,
+            range_min=scan.range_min,
+            range_max=scan.range_max,
+            half_fov_rad=config.OBSTACLE_DETECTION_HALF_FOV_RAD,
+            danger_distance=config.OBSTACLE_DANGER_DISTANCE_M,
+        )
+        left_clearance, right_clearance = perception.clearance_left_vs_right(
+            ranges=scan.ranges,
+            angle_min=scan.angle_min,
+            angle_increment=scan.angle_increment,
+            range_min=scan.range_min,
+            range_max=scan.range_max,
+            half_fov_rad=config.OBSTACLE_DETECTION_HALF_FOV_RAD,
+        )
+        return ObstacleInfo(
+            too_close=too_close,
+            left_clearance=left_clearance,
+            right_clearance=right_clearance,
+        )
+
     def _control_loop(self) -> None:
         """Periodic control tick (runs at config.CONTROL_LOOP_PERIOD)."""
         if not self._odom_received:
             return
         
         # Phase 3 instrumentation: log when an obstacle is detected (no avoidance yet)
-        if self._latest_scan is not None:
-            too_close = perception.is_obstacle_too_close(
-                ranges=self._latest_scan.ranges,
-                angle_min=self._latest_scan.angle_min,
-                angle_increment=self._latest_scan.angle_increment,
-                range_min=self._latest_scan.range_min,
-                range_max=self._latest_scan.range_max,
-                half_fov_rad=config.OBSTACLE_DETECTION_HALF_FOV_RAD,
-                danger_distance=config.OBSTACLE_DANGER_DISTANCE_M,
-            )
-            if too_close:
-                self.get_logger().warn(
-                    f'Obstacle detected within {config.OBSTACLE_DANGER_DISTANCE_M}m front cone',
-                    throttle_duration_sec=1.0,
-                )
+        obstacle_info = self._compute_obstacle_info()
 
         if self._state == ControllerState.DONE:
             self._publish_stop()
@@ -131,7 +151,7 @@ class WaypointController(Node):
         # Current target waypoint
         target_x, target_y = self._waypoints[self._waypoint_index]
 
-        # Pure logic — compute next state and command
+       # Pure logic — compute next state and command
         next_state, command, waypoint_reached = step(
             state=self._state,
             current_x=self._current_x,
@@ -141,6 +161,15 @@ class WaypointController(Node):
             target_y=target_y,
             gains=self._gains,
         )
+        # Reactive obstacle avoidance — post-process the waypoint command
+        if obstacle_info is not None:
+            command = apply_obstacle_avoidance(command, obstacle_info, self._gains)
+            if obstacle_info.too_close:
+                self.get_logger().warn(
+                    f'Avoiding obstacle (L={obstacle_info.left_clearance:.2f}m, '
+                    f'R={obstacle_info.right_clearance:.2f}m)',
+                    throttle_duration_sec=1.0,
+                )
 
         # Log transitions
         if next_state != self._state:

@@ -115,3 +115,50 @@ def is_obstacle_too_close(
         half_fov_rad=half_fov_rad,
     )
     return closest < danger_distance
+
+def clearance_left_vs_right(
+    ranges,
+    angle_min: float,
+    angle_increment: float,
+    range_min: float,
+    range_max: float,
+    half_fov_rad: float,
+) -> tuple:
+    """Compare clearance in the left half vs right half of the front cone.
+
+    Splits the front cone into two halves around the forward direction.
+    For each half, finds the minimum valid range — that's how much room
+    the robot has to maneuver on that side.
+
+    Args:
+        ranges, angle_min, angle_increment, range_min, range_max: from LaserScan
+        half_fov_rad: half-width of the front cone (rad)
+
+    Returns:
+        Tuple (left_clearance, right_clearance) in meters.
+        Larger value = more room on that side.
+    """
+    start, end = _front_index_range(
+        len(ranges), angle_min, angle_increment, half_fov_rad
+    )
+
+    # Split the cone into left and right halves at the center index
+    center = (start + end) // 2
+
+    left_min = _min_valid_range(ranges[center:end], range_min, range_max)
+    right_min = _min_valid_range(ranges[start:center], range_min, range_max)
+
+    return left_min, right_min
+
+
+def _min_valid_range(ranges, range_min: float, range_max: float) -> float:
+    """Return the smallest valid range in the slice, or range_max if none."""
+    closest = range_max
+    for r in ranges:
+        if not math.isfinite(r):
+            continue
+        if r < range_min or r > range_max:
+            continue
+        if r < closest:
+            closest = r
+    return closest
