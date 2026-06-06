@@ -19,8 +19,11 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
+
 
 from robot_controller import config
+from robot_controller import perception
 from robot_controller.pose_utils import yaw_from_ros_quaternion
 from robot_controller.state_machine import (
     ControllerState,
@@ -47,6 +50,9 @@ class WaypointController(Node):
         self._odom_subscription = self.create_subscription(
             Odometry, config.TOPIC_ODOM, self._on_odom, 10
         )
+        self._scan_subscription = self.create_subscription(
+            LaserScan, config.TOPIC_SCAN, self._on_scan, 10
+        )
         self._control_timer = self.create_timer(
             config.CONTROL_LOOP_PERIOD, self._control_loop
         )
@@ -56,6 +62,8 @@ class WaypointController(Node):
         self._current_y = 0.0
         self._current_yaw = 0.0
         self._odom_received = False
+         # Scan state (updated from /scan)
+        self._latest_scan = None
 
         # Waypoint state
         self._waypoints = list(config.DEFAULT_WAYPOINTS)
@@ -87,10 +95,31 @@ class WaypointController(Node):
         self._current_yaw = yaw_from_ros_quaternion(msg.pose.pose.orientation)
         self._odom_received = True
 
+    def _on_scan(self, msg: LaserScan) -> None:
+        """Cache the latest LaserScan message for the control loop to read."""
+        self._latest_scan = msg
+
     def _control_loop(self) -> None:
         """Periodic control tick (runs at config.CONTROL_LOOP_PERIOD)."""
         if not self._odom_received:
             return
+        
+        # Phase 3 instrumentation: log when an obstacle is detected (no avoidance yet)
+        if self._latest_scan is not None:
+            too_close = perception.is_obstacle_too_close(
+                ranges=self._latest_scan.ranges,
+                angle_min=self._latest_scan.angle_min,
+                angle_increment=self._latest_scan.angle_increment,
+                range_min=self._latest_scan.range_min,
+                range_max=self._latest_scan.range_max,
+                half_fov_rad=config.OBSTACLE_DETECTION_HALF_FOV_RAD,
+                danger_distance=config.OBSTACLE_DANGER_DISTANCE_M,
+            )
+            if too_close:
+                self.get_logger().warn(
+                    f'Obstacle detected within {config.OBSTACLE_DANGER_DISTANCE_M}m front cone',
+                    throttle_duration_sec=1.0,
+                )
 
         if self._state == ControllerState.DONE:
             self._publish_stop()

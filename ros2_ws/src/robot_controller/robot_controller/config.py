@@ -66,3 +66,25 @@ KP_ANGULAR = 1.5             # rotation gain (rad/s per radian of error)
 
 MAX_LINEAR_SPEED = 0.3       # m/s
 MAX_ANGULAR_SPEED = 1.5      # rad/s
+
+# ============================================================
+# LiDAR Subscription
+# ============================================================
+
+TOPIC_SCAN = "/scan"
+
+
+# ============================================================
+# Perception — Obstacle Detection
+# ============================================================
+# How wide a "front cone" do we consider for obstacle detection?
+# Half-FOV of 0.5 rad ≈ 28.6° on each side = 57° total cone in front.
+
+OBSTACLE_DETECTION_HALF_FOV_RAD = 0.5
+
+# Distance at which we consider an obstacle "too close" and trigger avoidance.
+# Calibrated for the Jetbot's max forward speed (0.3 m/s) and 20 Hz control loop:
+# the robot moves at most 0.015 m per control tick, so 0.4 m gives plenty of
+# reaction headroom.
+
+OBSTACLE_DANGER_DISTANCE_M = 0.4
