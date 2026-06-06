@@ -1,8 +1,8 @@
 # Isaac Sim Robot Control
 
-A production-grade mobile robotics project demonstrating sim-to-real architecture using **NVIDIA Isaac Sim 5.0** and **ROS 2 Jazzy**. The robot autonomously navigates a sequence of waypoints using closed-loop control with real-time odometry feedback. The control stack is fully decoupled from the simulator — the same code would drive a real Jetbot without modification.
+A production-grade mobile robotics project demonstrating sim-to-real architecture using **NVIDIA Isaac Sim 5.1** and **ROS 2 Jazzy**. The robot autonomously navigates a sequence of waypoints with closed-loop odometry feedback and reactively avoids LiDAR-detected obstacles along its path. The control stack is fully decoupled from the simulator — the same code would drive a real Jetbot without modification.
 
-[![Isaac Sim Robot Demo](https://img.youtube.com/vi/Z3b984r81SI/0.jpg)](https://youtu.be/Z3b984r81SI)
+[![Isaac Sim Robot Demo](https://img.youtube.com/vi/C-wrNuz52O8/0.jpg)](https://youtu.be/C-wrNuz52O8)
 
 ---
 
@@ -15,6 +15,8 @@ A production-grade mobile robotics project demonstrating sim-to-real architectur
 │  (Python 3.12)      │                │  (Python 3.11)      │
 │                     │   /odom        │                     │
 │                     │   ◄──────      │                     │
+│                     │   /scan        │                     │
+│                     │   ◄──────      │                     │
 └─────────────────────┘                └──────────┬──────────┘
                                                   │
                                             FastDDS bridge
@@ -22,7 +24,7 @@ A production-grade mobile robotics project demonstrating sim-to-real architectur
                                                   ▼
                                             ┌──────────┐
                                             │  Jetbot  │
-                                            │  in Sim  │
+                                            │ + LiDAR  │
                                             └──────────┘
 ```
 
@@ -36,17 +38,19 @@ Two independent processes communicate via ROS 2 topics over FastDDS. This separa
 
 ## Code Organization
 
-Both sides follow the **"functional core, imperative shell"** pattern. Pure logic (math, state machine) lives in standalone modules with no I/O dependencies; ROS 2 and Isaac Sim integration lives in thin shells that wrap the pure logic.
+Both sides follow the **"functional core, imperative shell"** pattern. Pure logic (math, state machine, perception) lives in standalone modules with no I/O dependencies; ROS 2 and Isaac Sim integration lives in thin shells that wrap the pure logic.
 
 ### Isaac Sim side (`isaac_sim/`)
 
 ```
 isaac_sim/
 ├── simulation.py          # Entry point — main loop, ~80 lines
-├── config.py              # Tunable parameters (wheels, asset paths, topics)
+├── config.py              # Tunable parameters (wheels, sensors, obstacles)
 ├── kinematics.py          # Pure math (quaternions, differential drive)
 ├── robot_bridge.py        # ROS 2 node: subscribes /cmd_vel, publishes /odom
 ├── scene_setup.py         # World, ground plane, robot loading
+├── sensors.py             # PhysX LiDAR + OmniGraph /scan publisher
+├── obstacles.py           # Static cuboid obstacles for testing avoidance
 └── run_simulation.sh      # Launch script with ROS 2 env vars
 ```
 
@@ -55,9 +59,10 @@ isaac_sim/
 ```
 robot_controller/
 ├── jetbot_controller.py   # Entry point — Node class, ROS 2 plumbing
-├── config.py              # Gains, tolerances, default waypoints
+├── config.py              # Gains, tolerances, waypoints, perception params
 ├── pose_utils.py          # Pure math (quaternion → yaw, angle wrap)
-└── state_machine.py       # Pure state machine (ROTATE/DRIVE logic, enum, dataclasses)
+├── state_machine.py       # Pure state machine + obstacle avoidance modifier
+└── perception.py          # Pure scan-processing functions
 ```
 
 ### Module dependency graph
@@ -67,12 +72,14 @@ robot_controller/
               │           │                          │                │
               ▼           │                          ▼                │
         scene_setup.py    │                   state_machine.py        │
-              │           │                          │                │
-              ▼           │                          ▼                │
-        robot_bridge.py   │                   pose_utils.py           │
-              │           │                          │                │
-              ▼           │                          ▼                │
-        kinematics.py     │                   config.py               │
+        sensors.py        │                          │                │
+        obstacles.py      │                          ▼                │
+              │           │                   perception.py           │
+              ▼           │                   pose_utils.py           │
+        robot_bridge.py   │                          │                │
+              │           │                          ▼                │
+              ▼           │                   config.py               │
+        kinematics.py     │                                           │
               │           │                                           │
               ▼           │                                           │
         config.py ────────┘                                           │
@@ -93,6 +100,12 @@ Higher-level modules depend on lower-level ones; never the reverse.
 - Real-time pose feedback from `/odom`
 - Smooth motion with continuous heading correction while driving
 
+### Reactive obstacle avoidance
+- 2D LiDAR (PhysX-based) publishing 360° scans at 20 Hz on `/scan`
+- Perception module analyzes the front cone for nearby obstacles
+- "Slow down and curve away" avoidance strategy applied as a post-processing layer
+- Pure functions for scan analysis — fully unit-testable
+
 ### Production-grade ROS 2 architecture
 - ROS 2 Jazzy controller node publishing differential drive commands
 - Standalone Isaac Sim script with embedded ROS 2 bridge
@@ -111,7 +124,7 @@ Higher-level modules depend on lower-level ones; never the reverse.
 
 ## Tech Stack
 
-- **Simulation:** NVIDIA Isaac Sim 5.0 (RTX 5090, driver 580 open kernel modules)
+- **Simulation:** NVIDIA Isaac Sim 5.1 (RTX 5090, driver 580 open kernel modules)
 - **Middleware:** ROS 2 Jazzy
 - **Language:** Python 3.11 (Isaac Sim) / Python 3.12 (ROS 2)
 - **DDS:** FastDDS
@@ -126,7 +139,7 @@ Higher-level modules depend on lower-level ones; never the reverse.
 
 - Ubuntu 24.04 LTS
 - NVIDIA GPU with driver 580+ (open kernel modules required for RTX 50-series)
-- NVIDIA Isaac Sim 5.0
+- NVIDIA Isaac Sim 5.1
 - ROS 2 Jazzy
 
 ### Build the workspace
@@ -154,13 +167,14 @@ source ros2_ws/install/setup.bash
 ros2 run robot_controller jetbot_controller
 ```
 
-The Jetbot will autonomously drive a 2×2m square: rotating to face each waypoint, then driving to it, until the loop is complete.
+The Jetbot will autonomously drive a 2×2m square: rotating to face each waypoint, then driving to it, while reactively avoiding obstacles in its path.
 
 ### Verify topics
 
 ```bash
-ros2 topic list             # /cmd_vel, /odom should appear
+ros2 topic list             # /cmd_vel, /odom, /scan should appear
 ros2 topic echo /odom       # Real-time pose feedback
+ros2 topic echo /scan       # 360° LiDAR readings (use --once to limit output)
 ros2 topic echo /cmd_vel    # Velocity commands from the controller
 ```
 
@@ -189,9 +203,26 @@ The controller subscribes to `/odom` and delegates to a pure state machine (`rob
 
 The state machine is implemented as a pure function — `step(state, pose, target, gains) → (next_state, command, reached)` — making it directly unit-testable without ROS 2 or Isaac Sim.
 
+### Reactive Obstacle Avoidance
+
+LiDAR data is processed by `robot_controller/perception.py`, which exposes pure functions for analyzing the scan:
+
+- `distance_to_nearest_obstacle_in_front()` — minimum range within the front cone
+- `is_obstacle_too_close()` — boolean threshold check
+- `clearance_left_vs_right()` — comparative space on either side of the forward direction
+
+Avoidance is implemented as a **post-processing modifier** in `state_machine.py`:
+
+```python
+command = step(...)                                  # waypoint command
+command = apply_obstacle_avoidance(command, info)    # avoidance overlay
+```
+
+When an obstacle is within the danger distance, the modifier scales linear velocity to 30% and adds an angular velocity toward the side with more clearance. This architecture keeps the waypoint state machine pure while making the avoidance strategy easily swappable.
+
 ### Python Interop Between Isaac Sim and ROS 2
 
-Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim ROS 2 bridge ships its own Python 3.11-compatible `rclpy`, which is loaded via `LD_LIBRARY_PATH` and `PYTHONPATH` injection in `run_simulation.sh`. Inter-process communication happens at the FastDDS layer, so Python version mismatch doesn't matter at the wire level — the two processes only exchange serialized messages.
+Isaac Sim 5.1 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim ROS 2 bridge ships its own Python 3.11-compatible `rclpy`, which is loaded via `LD_LIBRARY_PATH` and `PYTHONPATH` injection in `run_simulation.sh`. Inter-process communication happens at the FastDDS layer, so Python version mismatch doesn't matter at the wire level — the two processes only exchange serialized messages.
 
 ---
 
@@ -209,15 +240,14 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 - [x] Proportional control on heading and distance errors
 - [x] Configurable waypoint sequence
 
-### Phase 3 — Architecture refactor & perception 🚧
+### Phase 3 — Architecture refactor & perception ✅
 - [x] Refactor to modular architecture (functional core / imperative shell)
 - [x] Extract pure logic into standalone, unit-testable modules
 - [x] Type-safe state machine with enums and dataclasses
 - [x] Centralized configuration modules
-- [ ] Add RTX LiDAR sensor in Isaac Sim
-- [ ] Publish `/scan` topic (sensor_msgs/LaserScan)
-- [ ] Implement reactive obstacle avoidance
-- [ ] Combine waypoint following with obstacle detection
+- [x] Add 2D LiDAR sensor publishing `/scan`
+- [x] Static cuboid obstacles for testing
+- [x] Reactive obstacle avoidance with slow-and-curve strategy
 
 ### Phase 4 — Autonomous Navigation
 - [ ] Integrate Nav2 stack
@@ -225,7 +255,7 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 - [ ] Goal-based navigation with behavior trees
 
 ### Phase 5 — Production Engineering
-- [ ] Unit tests for kinematics and state machine
+- [ ] Unit tests for kinematics, perception, and state machine
 - [ ] Dockerfile and docker-compose for reproducibility
 - [ ] Integration tests with launch_testing
 - [ ] GitHub Actions CI/CD pipeline
@@ -235,7 +265,7 @@ Isaac Sim 5.0 ships Python 3.11; ROS 2 Jazzy targets Python 3.12. The Isaac Sim 
 
 ## Engineering Notes
 
-A detailed write-up of architecture decisions, sim-to-real considerations, and the Python version interop solution lives in [`docs/architecture.md`](docs/architecture.md).
+A detailed write-up of architecture decisions, sim-to-real considerations, the Python version interop solution, and the PhysX-vs-RTX LiDAR trade-off lives in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
